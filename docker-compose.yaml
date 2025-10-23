@@ -1,0 +1,23 @@
+services:
+  huab-translator-api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: huab-translator-api
+    restart: unless-stopped
+    environment:
+      - PORT=${PORT}
+      - APP_TOKEN=${APP_TOKEN}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - FREE_TIER_LIMIT_CHARS=500000
+      - FREE_TIER_FREEZE_THRESHOLD_PCT=98
+      - SQLITE_PATH=&{SQLITE_PATH}
+    ports:
+      - "$PORT:$PORT"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:$PORT/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
