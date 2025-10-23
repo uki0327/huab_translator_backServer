@@ -8,6 +8,8 @@ secrets/
 # 데이터베이스/런타임 산출물
 *.sqlite
 *.sqlite3
+*.sqlite-wal
+*.sqlite-shm
 *.db
 *.log
 
