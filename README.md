@@ -19,7 +19,7 @@
 ---
 
 ## 📁 폴더 구조
-
+```
 translate-proxy/
 ├── server/
 │   ├── index.js
@@ -31,25 +31,30 @@ translate-proxy/
 ├── .gitignore
 ├── docker-compose.yaml
 └── README.md
-
+```
 ---
 
 ## ⚙️ 설치 방법
 
-```bash
 # 1. 저장소 클론
+```bash
 git clone https://github.com/wodykr/huab_translator_backServer.git
 cd huab_translator_backServer
-
+```
 # 2. 환경 설정 파일 생성
+```bash
 cp server/env.example .env
+```
 
 # 3. 환경 변수 수정
+```bash
 nano .env
+```
 
 # 4. Docker Compose 실행
+```bash
 docker compose up -d
-
+```
 
 ⸻
 
@@ -63,13 +68,14 @@ FREE_TIER_LIMIT_CHARS	무료 번역 문자 수 한도
 FREE_TIER_FREEZE_THRESHOLD_PCT	차단 임계 비율 (예: 98% 도달 시 차단)
 SQLITE_PATH	SQLite DB 파일 경로
 
+```env
 GOOGLE_API_KEY=PUT_YOUR_KEY_HERE
 APP_TOKEN=app-token-for-translate-secure
 PORT=3000
 FREE_TIER_LIMIT_CHARS=500000
 FREE_TIER_FREEZE_THRESHOLD_PCT=98
 SQLITE_PATH=/app/data/usage.sqlite
-
+```
 
 ⸻
 
@@ -84,14 +90,15 @@ POST	/translate	번역 요청 (X-App-Token 필요)
 ⸻
 
 📤 예제 요청 (cURL)
-
+```bash
 curl -s -X POST https://translator.example.com/translate \
   -H "Content-Type: application/json" \
   -H "X-App-Token: app-token-for-translate-secure" \
   -d '{"text":"사랑해","source":"ko","target":"lo"}'
+```
 
 ✅ 예제 응답
-
+```json
 {
   "translations": ["ຂ້ອຍຮັກເຈົ້າ"],
   "cached": false,
@@ -100,14 +107,16 @@ curl -s -X POST https://translator.example.com/translate \
   "used_after": 12345,
   "limit": 500000
 }
-
+```
 
 ⸻
 
 📊 사용량 조회 예시
-
+```bash
 curl -s https://translator.example.com/usage
+```
 
+```json
 {
   "month_key": "2025-10-PT",
   "used": 12345,
@@ -117,15 +126,16 @@ curl -s https://translator.example.com/usage
   "frozen": false,
   "unit": "characters"
 }
-
+```
 
 ⸻
 
 🧱 로컬 테스트 (Docker 없이)
-
+```bash
 cd server
 npm install
 node index.js
+```
 
 이후 브라우저에서 http://localhost:3000/healthz 접속
 
