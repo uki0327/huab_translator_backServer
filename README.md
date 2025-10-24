@@ -1,11 +1,3 @@
-좋습니다, 우디님.
-아래는 마크다운 문법이 완전히 정상적으로 복구된 형태의 README.md 입니다.
-GitHub에서 그대로 렌더링하면 제목, 표, 코드블록, 이모지, 링크 모두 예쁘게 표시됩니다.
-저장소 주소도 https://github.com/wodykr/huab_translator_backServer.git 으로 반영했습니다.
-
-⸻
-
-
 # 🌐 Huab Translator Proxy Server
 
 경량 **Node.js** 백엔드 서버로, **Google Translation API (v2)** 를 안전하게 프록시합니다.  
@@ -171,7 +163,3 @@ git push origin main
 
 	3.	이제 https://github.com/wodykr/huab_translator_backServer 에 접속하면
 자동으로 서식이 적용된 깔끔한 README가 표시됩니다. ✅
-
-⸻
-
-원하신다면 이 README의 상단에 배너 이미지나 프로젝트 로고(예: “Huab Translator Proxy Server” 글자 이미지)를 포함한 확장 버전도 만들어드릴 수 있습니다. 원하시나요?
