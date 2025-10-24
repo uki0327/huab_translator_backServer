@@ -143,23 +143,3 @@ node index.js
 
 MIT License © 2025 Wody
 자유롭게 수정 및 배포 가능. 단, Google API Key는 개인 소유로 유지하세요.
-
----
-
-### ✅ 적용 방법 (GitHub에 예쁘게 표시되게)
-
-1. 위 내용을 복사하여 프로젝트 루트에 **`README.md`** 파일로 저장합니다.
-
-   ```bash
-   nano README.md
-
-붙여넣고 저장 (Ctrl + O, Enter, Ctrl + X)
-	2.	Git에 반영합니다.
-
-git add README.md
-git commit -m "docs: add formatted README.md"
-git push origin main
-
-
-	3.	이제 https://github.com/wodykr/huab_translator_backServer 에 접속하면
-자동으로 서식이 적용된 깔끔한 README가 표시됩니다. ✅
