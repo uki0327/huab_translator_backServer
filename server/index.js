@@ -439,7 +439,17 @@ function getUsageRow(monthKey, apiType) {
 
 // 사용량 증가
 function addUsage(monthKey, apiType, delta) {
-  INCR_USAGE_BY_API.run(delta, new Date().toISOString(), monthKey, apiType);
+  const result = INCR_USAGE_BY_API.run(delta, new Date().toISOString(), monthKey, apiType);
+
+  // 로깅: 사용량 증가 확인
+  if (result.changes > 0) {
+    const updated = getUsageRow(monthKey, apiType);
+    console.log(`[Usage] ${apiType.toUpperCase()} +${delta} chars → total: ${updated.used} (${monthKey})`);
+  } else {
+    console.error(`[Usage] WARNING: Failed to update ${apiType} usage for ${monthKey}`);
+  }
+
+  return result.changes;
 }
 
 // 동결 상태 설정
@@ -453,8 +463,14 @@ function rolloverIfMonthChanged(currentKey) {
   const r2 = SELECT_USAGE_BY_API.get(currentKey, 'tts');
   const now = new Date().toISOString();
 
-  if (!r1) UPSERT_USAGE_BY_API.run(currentKey, 'translation', 0, 0, now);
-  if (!r2) UPSERT_USAGE_BY_API.run(currentKey, 'tts', 0, 0, now);
+  if (!r1) {
+    UPSERT_USAGE_BY_API.run(currentKey, 'translation', 0, 0, now);
+    console.log(`[Rollover] New month detected: ${currentKey} | TRANSLATION initialized to 0`);
+  }
+  if (!r2) {
+    UPSERT_USAGE_BY_API.run(currentKey, 'tts', 0, 0, now);
+    console.log(`[Rollover] New month detected: ${currentKey} | TTS initialized to 0`);
+  }
 }
 
 // 모든 API 사용량 조회
