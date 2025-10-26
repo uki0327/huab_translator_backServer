@@ -67,7 +67,7 @@ function getMonthKeyPST(date = new Date()) {
 }
 
 // ─────────────────────────────────────────────
-// SQLite 초기화
+// SQLite 초기화 및 마이그레이션
 // ─────────────────────────────────────────────
 ensureParentDir(SQLITE_PATH);
 const isNewDb = !fs.existsSync(SQLITE_PATH);
@@ -78,26 +78,56 @@ db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 db.pragma('foreign_keys = ON');
 
+// 마이그레이션 메타 테이블 생성
 db.exec(`
   CREATE TABLE IF NOT EXISTS schema_migrations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
-    applied_at TEXT NOT NULL
+    applied_at TEXT NOT NULL,
+    description TEXT
   )
 `);
+
+// 마이그레이션 헬퍼 함수
 function hasMigration(name) {
   return !!db.prepare('SELECT 1 FROM schema_migrations WHERE name = ?').get(name);
 }
-function applyMigration(name, sql) {
-  if (hasMigration(name)) return;
+
+function applyMigration(name, description, sqlOrFn) {
+  if (hasMigration(name)) {
+    console.log(`[Migration] Skip: ${name} (already applied)`);
+    return;
+  }
+
   const now = new Date().toISOString();
+  console.log(`[Migration] Applying: ${name} - ${description}`);
+
   const tx = db.transaction(() => {
-    db.exec(sql);
-    db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(name, now);
+    // SQL 문자열이면 exec, 함수면 실행
+    if (typeof sqlOrFn === 'string') {
+      db.exec(sqlOrFn);
+    } else if (typeof sqlOrFn === 'function') {
+      sqlOrFn(db);
+    }
+    db.prepare('INSERT INTO schema_migrations (name, applied_at, description) VALUES (?, ?, ?)')
+      .run(name, now, description);
   });
-  tx();
+
+  try {
+    tx();
+    console.log(`[Migration] Success: ${name}`);
+  } catch (e) {
+    console.error(`[Migration] Failed: ${name}`, e.message);
+    throw e;
+  }
 }
-applyMigration('001_init', `
+
+// ─────────────────────────────────────────────
+// 마이그레이션 정의 (순서대로 실행됨)
+// ─────────────────────────────────────────────
+
+// v1.0.0: 초기 스키마
+applyMigration('001_init', 'Create usage_monthly table', `
   CREATE TABLE IF NOT EXISTS usage_monthly (
     month_key   TEXT PRIMARY KEY,
     chars_used  INTEGER NOT NULL DEFAULT 0,
@@ -105,7 +135,36 @@ applyMigration('001_init', `
     updated_at  TEXT NOT NULL
   )
 `);
-if (isNewDb) console.log('SQLite DB 생성:', path.resolve(SQLITE_PATH));
+
+// v2.0.0: TTS 지원 (스키마 변경 없음, 기존 테이블 재사용)
+applyMigration('002_tts_support', 'Add TTS support (schema compatible)', (db) => {
+  // TTS는 기존 usage_monthly 테이블을 그대로 사용 (Translation + TTS 통합 quota)
+  // 스키마 변경 없음, 마이그레이션 기록만 남김
+  console.log('  → TTS uses existing quota system (no schema changes)');
+});
+
+// 향후 마이그레이션 예제 (주석):
+// applyMigration('003_add_api_logs', 'Add API request logs table', `
+//   CREATE TABLE IF NOT EXISTS api_logs (
+//     id INTEGER PRIMARY KEY AUTOINCREMENT,
+//     endpoint TEXT NOT NULL,
+//     status INTEGER NOT NULL,
+//     chars INTEGER NOT NULL DEFAULT 0,
+//     created_at TEXT NOT NULL
+//   );
+//   CREATE INDEX idx_api_logs_created_at ON api_logs(created_at);
+// `);
+
+if (isNewDb) {
+  console.log('[Database] Created new SQLite DB:', path.resolve(SQLITE_PATH));
+} else {
+  console.log('[Database] Loaded existing DB:', path.resolve(SQLITE_PATH));
+}
+
+// 적용된 마이그레이션 로그
+const migrations = db.prepare('SELECT name, applied_at FROM schema_migrations ORDER BY id').all();
+console.log(`[Database] Applied migrations: ${migrations.length}`);
+migrations.forEach(m => console.log(`  - ${m.name} (${m.applied_at.split('T')[0]})`));
 
 // ─────────────────────────────────────────────
 // DB helper

@@ -81,15 +81,21 @@ curl -X POST http://localhost:3000/tts \
    - Automatic freeze when hitting 96-98% threshold
    - Prevents overage charges
 
-3. **Database Schema** (lines 71-108)
-   - Migration-based schema using `schema_migrations` table
-   - Single `usage_monthly` table with columns:
+3. **Database Schema & Migrations** (lines 70-167)
+   - **Migration system**: Version-tracked, sequential, transaction-based
+   - **Migration metadata**: `schema_migrations` table tracks applied migrations
+   - **Main table**: `usage_monthly` with columns:
      - `month_key` (PRIMARY KEY): PST-based month identifier
-     - `chars_used`: accumulated character count
+     - `chars_used`: accumulated character count (Translation + TTS combined)
      - `frozen`: boolean flag (0/1) for quota exhaustion
      - `updated_at`: timestamp of last update
+   - **Migration history**:
+     - `001_init`: Initial schema (v1.0.0)
+     - `002_tts_support`: TTS support marker (v2.0.0, no schema changes)
    - WAL mode for better concurrency
    - Auto-creates DB directory with 0700 permissions
+   - **Zero-downtime upgrades**: Backward compatible, preserves existing data
+   - See [MIGRATIONS.md](MIGRATIONS.md) for detailed migration guide
 
 4. **Google Translation API v2 Integration** (lines 243-273)
    - Uses API Key authentication (not OAuth)
@@ -194,6 +200,12 @@ huab_translator_backServer/
 4. **Freeze Behavior**: Once frozen, remains frozen until next month (no manual reset)
 5. **Prepared Statements**: All DB queries use prepared statements for performance and safety
 6. **Error Handling**: Retry logic only for 429 and 5xx errors; 4xx errors fail immediately
+7. **Database Migrations**:
+   - Sequential, transaction-based migrations ensure data integrity
+   - Upgrading from v1.0.0 to v2.0.0+ preserves all existing usage data
+   - Never modify already-applied migrations
+   - Add new migrations with incremental numbering (003, 004, etc.)
+   - See [MIGRATIONS.md](MIGRATIONS.md) for adding new migrations
 
 ## Dependencies
 
