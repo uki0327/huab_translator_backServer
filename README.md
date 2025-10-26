@@ -1,7 +1,25 @@
-# 🌐 Huab Translator Proxy Server
+# 🌐 Huab Translator API Server
 
-경량 **Node.js** 백엔드 서버로, **Google Cloud API (Translation v2 & Text-to-Speech v1)** 를 안전하게 프록시합니다.
-이를 통해 **Flutter 등 외부 앱이 Google API Key를 직접 노출하지 않고** 번역 및 음성합성 기능을 사용할 수 있습니다.
+**Huab Translator** 모바일 앱을 위한 백엔드 API 서버입니다.
+Google Cloud API (Translation v2 & Text-to-Speech v1)를 안전하게 프록시하여, 모바일 앱에서 **API Key 노출 없이** 번역 및 음성합성 기능을 사용할 수 있습니다.
+
+---
+
+## 📑 목차
+
+### 모바일 앱 개발자용
+- [📱 빠른 시작](#-모바일-앱-개발자를-위한-빠른-시작) - Flutter 통합 예제
+- [🧠 API 엔드포인트 요약](#-api-엔드포인트-요약) - 전체 API 개요
+- [📊 사용량 조회 API](#-사용량-조회-api) - Quota 확인
+- [📤 번역 API](#-번역-api-translation) - 텍스트 번역
+- [🔊 음성합성 API](#-음성합성-api-text-to-speech) - TTS 기능
+- [💡 Flutter Service 클래스](#-flutter-service-클래스-완전한-예제) - 완전한 구현 예제
+
+### 서버 관리자용
+- [⚙️ 설치 방법](#️-설치-방법) - Docker 배포
+- [🧩 환경 변수](#-환경-변수-상세-설명) - 서버 설정
+- [🔧 문제 해결](#-문제-해결) - 트러블슈팅
+- [📚 추가 문서](#-추가-문서) - 상세 가이드
 
 ---
 
@@ -20,6 +38,147 @@
 - 🪶 **SQLite3 로컬 DB** — 외부 의존성 없이 자동 초기화
 - 🔄 **자동 마이그레이션** — 데이터 손실 없이 버전 업그레이드
 - 🧱 **Docker 지원** — 단일 Compose 파일로 손쉬운 배포
+
+---
+
+## 📱 모바일 앱 개발자를 위한 빠른 시작
+
+### 서버 URL 및 인증
+
+**프로덕션 서버 URL:**
+```
+https://your-server-domain.com
+```
+
+**인증 방법:**
+- 모든 API 요청에 `X-App-Token` 헤더 필요
+- 토큰 값은 서버 관리자에게 문의
+
+### Flutter 패키지 설치
+
+```yaml
+# pubspec.yaml
+dependencies:
+  http: ^1.1.0
+  audioplayers: ^5.2.1  # TTS 재생용
+```
+
+### 기본 사용 예제
+
+#### 1. 번역 요청
+```dart
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+Future<String> translate(String text, {String from = 'ko', String to = 'lo'}) async {
+  final response = await http.post(
+    Uri.parse('https://your-server-domain.com/translate'),
+    headers: {
+      'Content-Type': 'application/json',
+      'X-App-Token': 'your-app-token-here',
+    },
+    body: jsonEncode({
+      'text': text,
+      'source': from,
+      'target': to,
+    }),
+  );
+
+  if (response.statusCode == 200) {
+    final data = jsonDecode(response.body);
+    return data['translations'][0];
+  } else if (response.statusCode == 429) {
+    throw Exception('월 사용량 초과');
+  } else {
+    throw Exception('번역 실패: ${response.statusCode}');
+  }
+}
+```
+
+#### 2. 음성합성 (TTS) 요청
+```dart
+import 'dart:typed_data';
+import 'package:audioplayers/audioplayers.dart';
+
+Future<void> speakText(String text, {String lang = 'ko-KR'}) async {
+  final response = await http.post(
+    Uri.parse('https://your-server-domain.com/tts'),
+    headers: {
+      'Content-Type': 'application/json',
+      'X-App-Token': 'your-app-token-here',
+    },
+    body: jsonEncode({
+      'text': text,
+      'languageCode': lang,
+      'audioEncoding': 'MP3',
+    }),
+  );
+
+  if (response.statusCode == 200) {
+    final data = jsonDecode(response.body);
+    final Uint8List audioBytes = base64Decode(data['audioContent']);
+
+    final player = AudioPlayer();
+    await player.play(BytesSource(audioBytes));
+  } else {
+    throw Exception('TTS 실패: ${response.statusCode}');
+  }
+}
+```
+
+#### 3. 사용량 조회
+```dart
+Future<Map<String, dynamic>> getUsage() async {
+  final response = await http.get(
+    Uri.parse('https://your-server-domain.com/usage'),
+  );
+
+  if (response.statusCode == 200) {
+    return jsonDecode(response.body);
+  } else {
+    throw Exception('사용량 조회 실패');
+  }
+}
+
+// 사용 예시
+void checkUsage() async {
+  final usage = await getUsage();
+  print('번역 사용량: ${usage['translation']['used']}/${usage['translation']['limit']}');
+  print('TTS 사용량: ${usage['tts']['used']}/${usage['tts']['limit']}');
+}
+```
+
+### 에러 처리
+
+```dart
+Future<String> translateWithErrorHandling(String text) async {
+  try {
+    final response = await http.post(
+      Uri.parse('https://your-server-domain.com/translate'),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-App-Token': 'your-app-token-here',
+      },
+      body: jsonEncode({'text': text}),
+    ).timeout(Duration(seconds: 10));
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return data['translations'][0];
+    } else if (response.statusCode == 401) {
+      throw Exception('인증 실패: APP_TOKEN을 확인하세요');
+    } else if (response.statusCode == 429) {
+      final data = jsonDecode(response.body);
+      throw Exception(data['error']);
+    } else {
+      throw Exception('서버 오류: ${response.statusCode}');
+    }
+  } catch (e) {
+    print('번역 오류: $e');
+    rethrow;
+  }
+}
+```
 
 ---
 
@@ -150,14 +309,26 @@ TRANSLATE_FREEZE_THRESHOLD_PCT=100
 
 ---
 
-## 🧠 API 엔드포인트
+## 🧠 API 엔드포인트 요약
 
-| 메서드 | 경로 | 설명 | 인증 |
-|--------|------|------|------|
-| `GET` | `/healthz` | 서버 상태 확인 | 불필요 |
-| `GET` | `/usage` | 월별 사용량 조회 (API별) | 불필요 |
-| `POST` | `/translate` | 텍스트 번역 | X-App-Token 필요 |
-| `POST` | `/tts` | 텍스트 음성 변환 | X-App-Token 필요 |
+**Base URL:** `https://your-server-domain.com`
+
+| 메서드 | 경로 | 설명 | 인증 | 비고 |
+|--------|------|------|------|------|
+| `GET` | `/healthz` | 서버 상태 확인 | ❌ | 서버 동작 여부 체크 |
+| `GET` | `/usage` | 월별 사용량 조회 | ❌ | 실시간 quota 확인 |
+| `POST` | `/translate` | 텍스트 번역 | ✅ | 한↔라오 번역 등 |
+| `POST` | `/tts` | 텍스트 음성 변환 | ✅ | MP3/WAV 오디오 생성 |
+
+**인증 헤더:**
+```
+X-App-Token: your-app-token-here
+```
+
+**공통 에러 코드:**
+- `401 Unauthorized`: 인증 토큰 없음/잘못됨
+- `429 Too Many Requests`: 월 사용량 초과
+- `500 Internal Server Error`: 서버 오류
 
 ---
 
@@ -500,6 +671,343 @@ final Uint8List audioBytes = base64Decode(data['audioContent']);
 
 final player = AudioPlayer();
 await player.play(BytesSource(audioBytes));
+```
+
+---
+
+## 💡 Flutter Service 클래스 (완전한 예제)
+
+프로덕션에서 사용할 수 있는 완전한 API 서비스 클래스입니다.
+
+### lib/services/translator_api_service.dart
+
+```dart
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:http/http.dart' as http;
+
+class TranslatorApiService {
+  final String baseUrl;
+  final String appToken;
+  final Duration timeout;
+
+  TranslatorApiService({
+    required this.baseUrl,
+    required this.appToken,
+    this.timeout = const Duration(seconds: 10),
+  });
+
+  // ==========================================
+  // 번역 API
+  // ==========================================
+
+  /// 단일 텍스트 번역
+  Future<String> translate(
+    String text, {
+    String from = 'ko',
+    String to = 'lo',
+  }) async {
+    final result = await translateBatch([text], from: from, to: to);
+    return result.first;
+  }
+
+  /// 배치 번역 (여러 텍스트 한 번에)
+  Future<List<String>> translateBatch(
+    List<String> texts, {
+    String from = 'ko',
+    String to = 'lo',
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/translate'),
+            headers: {
+              'Content-Type': 'application/json',
+              'X-App-Token': appToken,
+            },
+            body: jsonEncode({
+              'text': texts,
+              'source': from,
+              'target': to,
+            }),
+          )
+          .timeout(timeout);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return List<String>.from(data['translations']);
+      } else if (response.statusCode == 401) {
+        throw TranslatorApiException('인증 실패', code: 'AUTH_FAILED');
+      } else if (response.statusCode == 429) {
+        final data = jsonDecode(response.body);
+        throw TranslatorApiException(
+          data['error'] ?? '월 사용량 초과',
+          code: data['code'] ?? 'QUOTA_EXCEEDED',
+        );
+      } else {
+        throw TranslatorApiException(
+          '번역 실패 (${response.statusCode})',
+          code: 'TRANSLATION_FAILED',
+        );
+      }
+    } catch (e) {
+      if (e is TranslatorApiException) rethrow;
+      throw TranslatorApiException('네트워크 오류: $e', code: 'NETWORK_ERROR');
+    }
+  }
+
+  // ==========================================
+  // TTS API
+  // ==========================================
+
+  /// 텍스트를 음성으로 변환 (MP3 bytes 반환)
+  Future<Uint8List> textToSpeech(
+    String text, {
+    String languageCode = 'ko-KR',
+    String? voiceName,
+    String ssmlGender = 'NEUTRAL',
+    String audioEncoding = 'MP3',
+    double speakingRate = 1.0,
+    double pitch = 0.0,
+    double volumeGainDb = 0.0,
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/tts'),
+            headers: {
+              'Content-Type': 'application/json',
+              'X-App-Token': appToken,
+            },
+            body: jsonEncode({
+              'text': text,
+              'languageCode': languageCode,
+              if (voiceName != null) 'voiceName': voiceName,
+              'ssmlGender': ssmlGender,
+              'audioEncoding': audioEncoding,
+              'speakingRate': speakingRate,
+              'pitch': pitch,
+              'volumeGainDb': volumeGainDb,
+            }),
+          )
+          .timeout(timeout);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return base64Decode(data['audioContent']);
+      } else if (response.statusCode == 401) {
+        throw TranslatorApiException('인증 실패', code: 'AUTH_FAILED');
+      } else if (response.statusCode == 429) {
+        final data = jsonDecode(response.body);
+        throw TranslatorApiException(
+          data['error'] ?? 'TTS 월 사용량 초과',
+          code: data['code'] ?? 'TTS_QUOTA_EXCEEDED',
+        );
+      } else {
+        throw TranslatorApiException(
+          'TTS 실패 (${response.statusCode})',
+          code: 'TTS_FAILED',
+        );
+      }
+    } catch (e) {
+      if (e is TranslatorApiException) rethrow;
+      throw TranslatorApiException('네트워크 오류: $e', code: 'NETWORK_ERROR');
+    }
+  }
+
+  // ==========================================
+  // 사용량 조회 API
+  // ==========================================
+
+  /// 현재 월 사용량 조회
+  Future<UsageInfo> getUsage() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/usage'))
+          .timeout(timeout);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return UsageInfo.fromJson(data);
+      } else {
+        throw TranslatorApiException(
+          '사용량 조회 실패 (${response.statusCode})',
+          code: 'USAGE_FETCH_FAILED',
+        );
+      }
+    } catch (e) {
+      if (e is TranslatorApiException) rethrow;
+      throw TranslatorApiException('네트워크 오류: $e', code: 'NETWORK_ERROR');
+    }
+  }
+
+  // ==========================================
+  // 헬스체크 API
+  // ==========================================
+
+  /// 서버 상태 확인
+  Future<bool> checkHealth() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/healthz'))
+          .timeout(Duration(seconds: 5));
+      return response.statusCode == 200 && response.body == 'ok';
+    } catch (e) {
+      return false;
+    }
+  }
+}
+
+// ==========================================
+// 데이터 모델
+// ==========================================
+
+class UsageInfo {
+  final String monthKey;
+  final ApiUsage translation;
+  final ApiUsage tts;
+
+  UsageInfo({
+    required this.monthKey,
+    required this.translation,
+    required this.tts,
+  });
+
+  factory UsageInfo.fromJson(Map<String, dynamic> json) {
+    return UsageInfo(
+      monthKey: json['month_key'],
+      translation: ApiUsage.fromJson(json['translation']),
+      tts: ApiUsage.fromJson(json['tts']),
+    );
+  }
+
+  /// 번역 API 사용 가능 여부
+  bool get canUseTranslation => !translation.frozen && translation.remaining > 0;
+
+  /// TTS API 사용 가능 여부
+  bool get canUseTts => !tts.frozen && tts.remaining > 0;
+}
+
+class ApiUsage {
+  final int used;
+  final int limit;
+  final int remaining;
+  final int thresholdPct;
+  final bool frozen;
+  final String unit;
+
+  ApiUsage({
+    required this.used,
+    required this.limit,
+    required this.remaining,
+    required this.thresholdPct,
+    required this.frozen,
+    required this.unit,
+  });
+
+  factory ApiUsage.fromJson(Map<String, dynamic> json) {
+    return ApiUsage(
+      used: json['used'],
+      limit: json['limit'],
+      remaining: json['remaining'],
+      thresholdPct: json['threshold_pct'],
+      frozen: json['frozen'],
+      unit: json['unit'],
+    );
+  }
+
+  /// 사용률 (0.0 ~ 1.0)
+  double get usageRate => used / limit;
+
+  /// 사용률 퍼센트 (0 ~ 100)
+  int get usagePercent => (usageRate * 100).round();
+
+  /// 임계값 도달 여부
+  bool get nearLimit => usagePercent >= thresholdPct;
+}
+
+// ==========================================
+// 예외 클래스
+// ==========================================
+
+class TranslatorApiException implements Exception {
+  final String message;
+  final String code;
+
+  TranslatorApiException(this.message, {required this.code});
+
+  @override
+  String toString() => 'TranslatorApiException: $message (code: $code)';
+
+  /// 사용자에게 표시할 메시지
+  String get userFriendlyMessage {
+    switch (code) {
+      case 'AUTH_FAILED':
+        return '인증에 실패했습니다. 앱을 다시 시작해주세요.';
+      case 'TRANSLATION_FREE_TIER_EXHAUSTED':
+      case 'QUOTA_EXCEEDED':
+        return '이번 달 번역 무료 사용량을 모두 사용했습니다.';
+      case 'TTS_FREE_TIER_EXHAUSTED':
+      case 'TTS_QUOTA_EXCEEDED':
+        return '이번 달 음성합성 무료 사용량을 모두 사용했습니다.';
+      case 'NETWORK_ERROR':
+        return '네트워크 연결을 확인해주세요.';
+      default:
+        return message;
+    }
+  }
+}
+```
+
+### 사용 예제
+
+```dart
+void main() async {
+  // 서비스 초기화
+  final api = TranslatorApiService(
+    baseUrl: 'https://your-server-domain.com',
+    appToken: 'your-app-token-here',
+  );
+
+  try {
+    // 1. 서버 상태 확인
+    final isHealthy = await api.checkHealth();
+    print('서버 상태: ${isHealthy ? "정상" : "오류"}');
+
+    // 2. 사용량 조회
+    final usage = await api.getUsage();
+    print('번역 사용률: ${usage.translation.usagePercent}%');
+    print('TTS 사용률: ${usage.tts.usagePercent}%');
+
+    // 3. 번역 실행
+    if (usage.canUseTranslation) {
+      final translated = await api.translate('안녕하세요', from: 'ko', to: 'lo');
+      print('번역 결과: $translated');
+    }
+
+    // 4. 배치 번역
+    final batch = await api.translateBatch(
+      ['안녕하세요', '감사합니다', '사랑해요'],
+      from: 'ko',
+      to: 'en',
+    );
+    print('배치 번역: $batch');
+
+    // 5. TTS 실행
+    if (usage.canUseTts) {
+      final audioBytes = await api.textToSpeech('안녕하세요');
+      print('음성 데이터 크기: ${audioBytes.length} bytes');
+
+      // AudioPlayer로 재생
+      // final player = AudioPlayer();
+      // await player.play(BytesSource(audioBytes));
+    }
+  } on TranslatorApiException catch (e) {
+    print('API 오류: ${e.userFriendlyMessage}');
+  } catch (e) {
+    print('예상치 못한 오류: $e');
+  }
+}
 ```
 
 ---
