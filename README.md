@@ -30,10 +30,11 @@ huab_translator_backServer/
 │   ├── index.js          # 메인 서버 로직 (Translation & TTS)
 │   ├── package.json      # v2.1.0
 │   ├── Dockerfile
-│   └── env.example
+│   └── env.example       # 서버 전용 환경변수 예시 (참고용)
 ├── data/                 # (자동 생성됨, SQLite 데이터 저장)
 ├── .env                  # (로컬 환경 설정, Git에 업로드 금지)
-├── docker-compose.yaml
+├── .env.example          # 환경 변수 템플릿 (상세 주석 포함)
+├── docker-compose.yaml   # Docker Compose 설정 (하드코딩 제거됨)
 ├── CLAUDE.md             # Claude Code용 개발 가이드
 ├── MIGRATIONS.md         # 데이터베이스 마이그레이션 가이드
 └── README.md
@@ -51,7 +52,7 @@ cd huab_translator_backServer
 
 ### 2. 환경 설정 파일 생성
 ```bash
-cp server/env.example .env
+cp .env.example .env
 ```
 
 ### 3. 환경 변수 수정
@@ -59,28 +60,15 @@ cp server/env.example .env
 nano .env
 ```
 
-**.env 파일 예시:**
-```env
-# Google Cloud API Key (Translation & TTS 공통)
-GOOGLE_API_KEY=PUT_YOUR_KEY_HERE
+**필수 설정 항목:**
+- `GOOGLE_API_KEY`: Google Cloud Console에서 발급받은 API 키
+- `APP_TOKEN`: 클라이언트 인증용 토큰 (강력한 무작위 문자열 권장)
 
-# 앱 인증 토큰
-APP_TOKEN=app-token-for-translate-secure
+**선택 설정 항목:** (기본값 사용 가능)
+- Translation/TTS 무료 한도 및 차단 임계값
+- 서버 포트, DB 경로, Healthcheck 설정
 
-# 서버 포트
-PORT=3000
-
-# Translation API 무료 한도 (Google: 월 50만 문자)
-TRANSLATE_FREE_TIER_CHARS=500000
-TRANSLATE_FREEZE_THRESHOLD_PCT=98
-
-# TTS API 무료 한도 (Google Standard: 월 400만 문자)
-TTS_FREE_TIER_CHARS=4000000
-TTS_FREEZE_THRESHOLD_PCT=98
-
-# SQLite DB 경로
-SQLITE_PATH=/app/data/usage.sqlite
-```
+자세한 내용은 `.env.example` 파일의 주석을 참조하세요.
 
 ### 4. Docker Compose 실행
 ```bash
@@ -97,20 +85,52 @@ curl http://localhost:3000/healthz
 
 ## 🧩 환경 변수 상세 설명
 
-| 변수명 | 설명 | 기본값 | 필수 |
-|--------|------|--------|------|
-| `GOOGLE_API_KEY` | Google Cloud API 키 (Translation & TTS 공통) | - | ✅ |
-| `APP_TOKEN` | API 요청 인증용 토큰 (X-App-Token 헤더) | - | ✅ |
-| `PORT` | 서버 포트 번호 | 3000 | ❌ |
-| `TRANSLATE_FREE_TIER_CHARS` | Translation 월별 무료 한도 | 500000 | ❌ |
-| `TRANSLATE_FREEZE_THRESHOLD_PCT` | Translation 차단 임계 비율 | 98 | ❌ |
-| `TTS_FREE_TIER_CHARS` | TTS 월별 무료 한도 (Standard voices) | 4000000 | ❌ |
-| `TTS_FREEZE_THRESHOLD_PCT` | TTS 차단 임계 비율 | 98 | ❌ |
-| `SQLITE_PATH` | SQLite DB 파일 경로 | /app/data/usage.sqlite | ❌ |
+### 필수 환경 변수
+
+| 변수명 | 설명 |
+|--------|------|
+| `GOOGLE_API_KEY` | Google Cloud API 키 (Translation & TTS 공통) |
+| `APP_TOKEN` | API 요청 인증용 토큰 (X-App-Token 헤더) |
+
+### 선택 환경 변수 (기본값 포함)
+
+| 카테고리 | 변수명 | 설명 | 기본값 |
+|----------|--------|------|--------|
+| **서버** | `PORT` | 서버 포트 번호 | `3000` |
+| **Translation** | `TRANSLATE_FREE_TIER_CHARS` | 월별 무료 한도 (문자 수) | `500000` (50만) |
+| | `TRANSLATE_FREEZE_THRESHOLD_PCT` | 차단 임계 비율 (%) | `98` |
+| **TTS** | `TTS_FREE_TIER_CHARS` | 월별 무료 한도 (문자 수) | `4000000` (400만) |
+| | `TTS_FREEZE_THRESHOLD_PCT` | 차단 임계 비율 (%) | `98` |
+| **Database** | `SQLITE_PATH` | SQLite DB 파일 경로 | `/app/data/usage.sqlite` |
+| **Healthcheck** | `HEALTHCHECK_INTERVAL` | 체크 주기 | `30s` |
+| | `HEALTHCHECK_TIMEOUT` | 타임아웃 | `5s` |
+| | `HEALTHCHECK_RETRIES` | 재시도 횟수 | `3` |
+| | `HEALTHCHECK_START_PERIOD` | 시작 대기 시간 | `10s` |
+
+### Quota 설정 예시
+
+**WaveNet 음성 사용 시** (월 100만 문자 무료):
+```env
+TTS_FREE_TIER_CHARS=1000000
+TTS_FREEZE_THRESHOLD_PCT=98
+```
+
+**더 보수적인 차단** (90% 도달 시):
+```env
+TRANSLATE_FREEZE_THRESHOLD_PCT=90
+TTS_FREEZE_THRESHOLD_PCT=90
+```
+
+**Translation만 제한 없이** (개발/테스트 환경):
+```env
+TRANSLATE_FREE_TIER_CHARS=999999999
+TRANSLATE_FREEZE_THRESHOLD_PCT=100
+```
 
 **참고:**
 - Translation과 TTS는 **별도 quota**로 관리됩니다
 - Translation이 차단되어도 TTS는 계속 사용 가능 (반대도 동일)
+- 각 API별로 무료 한도와 차단 임계값을 독립적으로 설정 가능
 
 ---
 

@@ -12,21 +12,21 @@ services:
       - APP_TOKEN=${APP_TOKEN}
       # 서버 포트
       - PORT=${PORT}
-      # Translation API 무료 한도 (월 50만 문자)
-      - TRANSLATE_FREE_TIER_CHARS=${TRANSLATE_FREE_TIER_CHARS:-500000}
-      - TRANSLATE_FREEZE_THRESHOLD_PCT=${TRANSLATE_FREEZE_THRESHOLD_PCT:-98}
-      # TTS API 무료 한도 (Standard: 월 400만 문자)
-      - TTS_FREE_TIER_CHARS=${TTS_FREE_TIER_CHARS:-4000000}
-      - TTS_FREEZE_THRESHOLD_PCT=${TTS_FREEZE_THRESHOLD_PCT:-98}
+      # Translation API 무료 한도
+      - TRANSLATE_FREE_TIER_CHARS=${TRANSLATE_FREE_TIER_CHARS}
+      - TRANSLATE_FREEZE_THRESHOLD_PCT=${TRANSLATE_FREEZE_THRESHOLD_PCT}
+      # TTS API 무료 한도
+      - TTS_FREE_TIER_CHARS=${TTS_FREE_TIER_CHARS}
+      - TTS_FREEZE_THRESHOLD_PCT=${TTS_FREEZE_THRESHOLD_PCT}
       # SQLite DB 경로
-      - SQLITE_PATH=${SQLITE_PATH:-/app/data/usage.sqlite}
+      - SQLITE_PATH=${SQLITE_PATH}
     ports:
-      - "${PORT:-3000}:${PORT:-3000}"
+      - "${PORT}:${PORT}"
     volumes:
       - ./data:/app/data
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:${PORT:-3000}/healthz"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      test: ["CMD", "wget", "-qO-", "http://localhost:${PORT}/healthz"]
+      interval: ${HEALTHCHECK_INTERVAL}
+      timeout: ${HEALTHCHECK_TIMEOUT}
+      retries: ${HEALTHCHECK_RETRIES}
+      start_period: ${HEALTHCHECK_START_PERIOD}
