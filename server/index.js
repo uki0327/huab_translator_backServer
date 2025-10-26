@@ -85,34 +85,177 @@ function getMonthKeyPST(date = new Date()) {
 // ─────────────────────────────────────────────
 // SQLite 초기화 및 마이그레이션
 // ─────────────────────────────────────────────
+
+// 데이터베이스 백업 함수
+function backupDatabase(dbPath) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = dbPath.replace(/\.sqlite$/, `.backup-${timestamp}.sqlite`);
+  try {
+    fs.copyFileSync(dbPath, backupPath);
+    console.log(`[Database] Backup created: ${backupPath}`);
+    return backupPath;
+  } catch (e) {
+    console.error(`[Database] Backup failed: ${e.message}`);
+    return null;
+  }
+}
+
+// 데이터베이스 삭제 및 재생성 함수
+function recreateDatabase(dbPath) {
+  console.log('[Database] Attempting to recreate database...');
+  try {
+    // 기존 DB 백업 (가능하면)
+    if (fs.existsSync(dbPath)) {
+      backupDatabase(dbPath);
+      fs.unlinkSync(dbPath);
+      console.log('[Database] Old database removed');
+    }
+
+    // WAL 파일도 제거
+    const walPath = `${dbPath}-wal`;
+    const shmPath = `${dbPath}-shm`;
+    if (fs.existsSync(walPath)) fs.unlinkSync(walPath);
+    if (fs.existsSync(shmPath)) fs.unlinkSync(shmPath);
+
+    console.log('[Database] Database will be recreated on next initialization');
+    return true;
+  } catch (e) {
+    console.error('[Database] Failed to recreate:', e.message);
+    return false;
+  }
+}
+
+// 데이터베이스 health check 함수
+function checkDatabaseHealth(db) {
+  try {
+    // 1. 기본 쿼리 테스트
+    db.prepare('SELECT 1').get();
+
+    // 2. schema_migrations 테이블 존재 확인
+    const hasMigrationsTable = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type='table' AND name='schema_migrations'
+    `).get();
+
+    if (!hasMigrationsTable) {
+      console.log('[Database] schema_migrations table not found (fresh DB)');
+      return true; // 새 DB는 정상
+    }
+
+    // 3. 적용된 마이그레이션 확인
+    const migrations = db.prepare('SELECT name FROM schema_migrations ORDER BY id').all();
+    console.log(`[Database] Health check: ${migrations.length} migrations found`);
+
+    // 4. 최신 마이그레이션(003_separate_api_usage) 확인
+    const hasLatest = migrations.some(m => m.name === '003_separate_api_usage');
+
+    if (hasLatest) {
+      // 최신 버전: usage_by_api 테이블이 있어야 함
+      const hasNewTable = db.prepare(`
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='usage_by_api'
+      `).get();
+
+      if (!hasNewTable) {
+        console.error('[Database] INCONSISTENCY: Migration 003 applied but usage_by_api table missing!');
+        return false;
+      }
+    }
+
+    return true;
+  } catch (e) {
+    console.error('[Database] Health check failed:', e.message);
+    return false;
+  }
+}
+
 ensureParentDir(SQLITE_PATH);
 const isNewDb = !fs.existsSync(SQLITE_PATH);
-const db = new Database(SQLITE_PATH);
-ensureFilePerm600(SQLITE_PATH);
 
-db.pragma('journal_mode = WAL');
-db.pragma('synchronous = NORMAL');
-db.pragma('foreign_keys = ON');
+let db;
+let dbInitSuccess = false;
+
+// 데이터베이스 초기화 시도 (최대 2회)
+for (let attempt = 1; attempt <= 2; attempt++) {
+  try {
+    console.log(`[Database] Initialization attempt ${attempt}/${2}`);
+
+    db = new Database(SQLITE_PATH);
+    ensureFilePerm600(SQLITE_PATH);
+
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+    db.pragma('foreign_keys = ON');
+
+    // Health check 수행
+    if (!checkDatabaseHealth(db)) {
+      throw new Error('Database health check failed');
+    }
+
+    dbInitSuccess = true;
+    console.log('[Database] Initialization successful');
+    break;
+
+  } catch (e) {
+    console.error(`[Database] Initialization failed (attempt ${attempt}):`, e.message);
+
+    if (db) {
+      try { db.close(); } catch {}
+      db = null;
+    }
+
+    if (attempt === 1) {
+      // 첫 번째 실패: 백업 후 재생성 시도
+      console.log('[Database] Attempting recovery...');
+      if (recreateDatabase(SQLITE_PATH)) {
+        console.log('[Database] Recovery successful, retrying initialization...');
+        continue;
+      }
+    }
+
+    // 두 번째 실패 또는 복구 실패
+    console.error('[Database] FATAL: Could not initialize database after recovery attempt');
+    console.error('[Database] Please check file permissions and disk space');
+    console.error(`[Database] Database path: ${path.resolve(SQLITE_PATH)}`);
+    process.exit(1);
+  }
+}
+
+if (!dbInitSuccess || !db) {
+  console.error('[Database] FATAL: Database initialization failed');
+  process.exit(1);
+}
 
 // 마이그레이션 메타 테이블 생성
-db.exec(`
-  CREATE TABLE IF NOT EXISTS schema_migrations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    applied_at TEXT NOT NULL,
-    description TEXT
-  )
-`);
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      applied_at TEXT NOT NULL,
+      description TEXT
+    )
+  `);
+} catch (e) {
+  console.error('[Migration] FATAL: Could not create schema_migrations table:', e.message);
+  console.error('[Migration] Database may be corrupted. Please delete and restart.');
+  process.exit(1);
+}
 
 // 마이그레이션 헬퍼 함수
 function hasMigration(name) {
-  return !!db.prepare('SELECT 1 FROM schema_migrations WHERE name = ?').get(name);
+  try {
+    return !!db.prepare('SELECT 1 FROM schema_migrations WHERE name = ?').get(name);
+  } catch (e) {
+    console.error(`[Migration] Error checking migration '${name}':`, e.message);
+    return false;
+  }
 }
 
 function applyMigration(name, description, sqlOrFn) {
   if (hasMigration(name)) {
     console.log(`[Migration] Skip: ${name} (already applied)`);
-    return;
+    return { success: true, skipped: true };
   }
 
   const now = new Date().toISOString();
@@ -132,9 +275,11 @@ function applyMigration(name, description, sqlOrFn) {
   try {
     tx();
     console.log(`[Migration] Success: ${name}`);
+    return { success: true, skipped: false };
   } catch (e) {
     console.error(`[Migration] Failed: ${name}`, e.message);
-    throw e;
+    console.error(`[Migration] Stack trace:`, e.stack);
+    return { success: false, skipped: false, error: e.message };
   }
 }
 
@@ -142,25 +287,27 @@ function applyMigration(name, description, sqlOrFn) {
 // 마이그레이션 정의 (순서대로 실행됨)
 // ─────────────────────────────────────────────
 
+const migrationResults = [];
+
 // v1.0.0: 초기 스키마
-applyMigration('001_init', 'Create usage_monthly table', `
+migrationResults.push(applyMigration('001_init', 'Create usage_monthly table', `
   CREATE TABLE IF NOT EXISTS usage_monthly (
     month_key   TEXT PRIMARY KEY,
     chars_used  INTEGER NOT NULL DEFAULT 0,
     frozen      INTEGER NOT NULL DEFAULT 0,
     updated_at  TEXT NOT NULL
   )
-`);
+`));
 
 // v2.0.0: TTS 지원 (스키마 변경 없음, 기존 테이블 재사용)
-applyMigration('002_tts_support', 'Add TTS support (schema compatible)', (db) => {
+migrationResults.push(applyMigration('002_tts_support', 'Add TTS support (schema compatible)', (db) => {
   // TTS는 기존 usage_monthly 테이블을 그대로 사용 (Translation + TTS 통합 quota)
   // 스키마 변경 없음, 마이그레이션 기록만 남김
   console.log('  → TTS uses existing quota system (no schema changes)');
-});
+}));
 
 // v2.1.0: Translation/TTS 사용량 분리 (Google 무료 한도가 별도)
-applyMigration('003_separate_api_usage', 'Separate Translation and TTS usage tracking', (db) => {
+migrationResults.push(applyMigration('003_separate_api_usage', 'Separate Translation and TTS usage tracking', (db) => {
   console.log('  → Creating new usage_by_api table...');
 
   // 1. 새 테이블 생성 (API 타입별 사용량 추적)
@@ -196,7 +343,39 @@ applyMigration('003_separate_api_usage', 'Separate Translation and TTS usage tra
   db.exec(`ALTER TABLE usage_monthly RENAME TO usage_monthly_backup_v1`);
 
   console.log('  → Migration complete: usage_by_api table ready');
-});
+}));
+
+// 마이그레이션 결과 검증
+const failedMigrations = migrationResults.filter(r => !r.success);
+
+if (failedMigrations.length > 0) {
+  console.error('[Migration] CRITICAL: Some migrations failed!');
+  failedMigrations.forEach((result, idx) => {
+    console.error(`  - Migration ${idx + 1}: ${result.error || 'Unknown error'}`);
+  });
+
+  console.error('[Migration] Database is in an inconsistent state.');
+  console.error('[Migration] Automatic recovery: Backing up and recreating database...');
+
+  try {
+    db.close();
+  } catch (e) {
+    console.error('[Migration] Warning: Could not close database:', e.message);
+  }
+
+  if (recreateDatabase(SQLITE_PATH)) {
+    console.error('[Migration] Database recreated. Please restart the server.');
+    console.error('[Migration] Note: Historical usage data has been backed up but will not be restored.');
+    process.exit(1);
+  } else {
+    console.error('[Migration] FATAL: Could not recreate database.');
+    console.error('[Migration] Please manually delete the database file and restart:');
+    console.error(`[Migration]   rm ${path.resolve(SQLITE_PATH)}`);
+    console.error(`[Migration]   rm ${path.resolve(SQLITE_PATH)}-wal`);
+    console.error(`[Migration]   rm ${path.resolve(SQLITE_PATH)}-shm`);
+    process.exit(1);
+  }
+}
 
 if (isNewDb) {
   console.log('[Database] Created new SQLite DB:', path.resolve(SQLITE_PATH));
@@ -205,9 +384,13 @@ if (isNewDb) {
 }
 
 // 적용된 마이그레이션 로그
-const migrations = db.prepare('SELECT name, applied_at FROM schema_migrations ORDER BY id').all();
-console.log(`[Database] Applied migrations: ${migrations.length}`);
-migrations.forEach(m => console.log(`  - ${m.name} (${m.applied_at.split('T')[0]})`));
+try {
+  const migrations = db.prepare('SELECT name, applied_at FROM schema_migrations ORDER BY id').all();
+  console.log(`[Database] Applied migrations: ${migrations.length}`);
+  migrations.forEach(m => console.log(`  - ${m.name} (${m.applied_at.split('T')[0]})`));
+} catch (e) {
+  console.error('[Database] Warning: Could not read migration history:', e.message);
+}
 
 // ─────────────────────────────────────────────
 // DB helper (API 타입별 사용량 관리)
