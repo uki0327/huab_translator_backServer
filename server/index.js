@@ -15,7 +15,7 @@ const PORT = Number(process.env.PORT || 3000);
 const TRANSLATE_FREE_LIMIT = Number(process.env.TRANSLATE_FREE_TIER_CHARS || 500000);
 const TRANSLATE_FREEZE_PCT = Number(process.env.TRANSLATE_FREEZE_THRESHOLD_PCT || 98);
 
-// TTS API 무료 한도 (Google Standard: 월 400만 문자, WaveNet: 월 100만 문자)
+// TTS API 무료 한도 (Google Standard: 월 400만 문자)
 const TTS_FREE_LIMIT = Number(process.env.TTS_FREE_TIER_CHARS || 4000000);
 const TTS_FREEZE_PCT = Number(process.env.TTS_FREEZE_THRESHOLD_PCT || 98);
 

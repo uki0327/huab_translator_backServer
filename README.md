@@ -284,12 +284,6 @@ curl http://localhost:3000/healthz
 
 ### Quota 설정 예시
 
-**WaveNet 음성 사용 시** (월 100만 문자 무료):
-```env
-TTS_FREE_TIER_CHARS=1000000
-TTS_FREEZE_THRESHOLD_PCT=98
-```
-
 **더 보수적인 차단** (90% 도달 시):
 ```env
 TRANSLATE_FREEZE_THRESHOLD_PCT=90
@@ -527,11 +521,14 @@ X-App-Token: your-app-token-here
 
 | 언어 | 코드 | 사용 가능한 음성 예시 |
 |------|------|----------------------|
-| 한국어 | `ko-KR` | `ko-KR-Standard-A`, `ko-KR-Standard-B` |
-| 영어(미국) | `en-US` | `en-US-Standard-A`, `en-US-Wavenet-A` |
-| 일본어 | `ja-JP` | `ja-JP-Standard-A`, `ja-JP-Wavenet-A` |
-| 중국어 | `zh-CN` | `zh-CN-Standard-A` |
+| 한국어 | `ko-KR` | `ko-KR-Standard-A`, `ko-KR-Standard-B`, `ko-KR-Standard-C`, `ko-KR-Standard-D` |
+| 영어(미국) | `en-US` | `en-US-Standard-A`, `en-US-Standard-B`, `en-US-Standard-C`, `en-US-Standard-D` |
+| 일본어 | `ja-JP` | `ja-JP-Standard-A`, `ja-JP-Standard-B`, `ja-JP-Standard-C`, `ja-JP-Standard-D` |
+| 중국어 | `zh-CN` | `zh-CN-Standard-A`, `zh-CN-Standard-B`, `zh-CN-Standard-C`, `zh-CN-Standard-D` |
 | 태국어 | `th-TH` | `th-TH-Standard-A` |
+| 라오어 | `lo-LA` | `lo-LA-Standard-A` |
+
+**참고:** Standard 음성만 사용합니다 (월 400만 문자 무료).
 
 ### 요청 예시
 
