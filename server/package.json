@@ -1,6 +1,6 @@
 {
   "name": "huab-translator-proxy",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Google Cloud API Proxy Server for Translation v2 and Text-to-Speech v1",
   "main": "index.js",
   "type": "module",

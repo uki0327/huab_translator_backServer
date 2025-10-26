@@ -28,15 +28,19 @@
 huab_translator_backServer/
 ├── server/
 │   ├── index.js          # 메인 서버 로직 (Translation & TTS)
-│   ├── package.json      # v2.1.0
-│   ├── Dockerfile
+│   ├── package.json      # v2.1.1
+│   ├── Dockerfile        # Alpine 기반 Node.js 18 이미지
+│   ├── .dockerignore     # Docker 빌드 최적화
 │   └── env.example       # 서버 전용 환경변수 예시 (참고용)
 ├── data/                 # (자동 생성됨, SQLite 데이터 저장)
 ├── .env                  # (로컬 환경 설정, Git에 업로드 금지)
 ├── .env.example          # 환경 변수 템플릿 (상세 주석 포함)
-├── docker-compose.yaml   # Docker Compose 설정 (하드코딩 제거됨)
+├── docker-compose.yaml   # Docker Compose 설정
+├── docker_check.sh       # Docker 설정 점검 스크립트 (NEW)
+├── test_db_migration.sh  # 데이터베이스 마이그레이션 테스트 (NEW)
 ├── CLAUDE.md             # Claude Code용 개발 가이드
 ├── MIGRATIONS.md         # 데이터베이스 마이그레이션 가이드
+├── DOCKER.md             # Docker 배포 상세 가이드 (NEW)
 └── README.md
 ```
 
@@ -70,12 +74,24 @@ nano .env
 
 자세한 내용은 `.env.example` 파일의 주석을 참조하세요.
 
-### 4. Docker Compose 실행
+### 4. Docker 설정 점검 (권장)
+```bash
+./docker_check.sh
+```
+
+이 스크립트는 다음을 확인합니다:
+- ✓ 필수 파일 존재 여부
+- ✓ Dockerfile 구성
+- ✓ docker-compose.yaml 설정
+- ✓ 빌드 컨텍스트 최적화
+- ✓ 볼륨 및 권한 설정
+
+### 5. Docker Compose 실행
 ```bash
 docker compose up -d
 ```
 
-### 5. 서버 상태 확인
+### 6. 서버 상태 확인
 ```bash
 curl http://localhost:3000/healthz
 # 응답: ok
