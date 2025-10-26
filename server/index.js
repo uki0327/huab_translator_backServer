@@ -292,6 +292,117 @@ app.post('/translate', async (req, res) => {
   }
 });
 
+// TTS 프록시 (Text-to-Speech v1 API)
+app.post('/tts', async (req, res) => {
+  // 토큰 검사
+  const authErr = requireAppToken(req);
+  if (authErr) return res.status(401).json(authErr);
+
+  try {
+    let {
+      text,
+      languageCode = 'ko-KR',
+      voiceName,
+      ssmlGender = 'NEUTRAL',
+      audioEncoding = 'MP3',
+      speakingRate = 1.0,
+      pitch = 0.0,
+      volumeGainDb = 0.0
+    } = req.body || {};
+
+    if (!text) {
+      return res.status(400).json({ error: "Missing 'text'" });
+    }
+    const textStr = String(text);
+
+    // API 키 로드
+    let apiKey;
+    try { apiKey = loadGoogleApiKey(); }
+    catch (e) { return res.status(500).json({ error: e.message }); }
+
+    // PST 기준 월키 갱신 & 사용량 로딩
+    const monthKey = getMonthKeyPST();
+    rolloverIfMonthChanged(monthKey);
+    const row = getUsageRow(monthKey);
+    const used = Number(row.used || 0);
+    const frozen = !!row.frozen;
+
+    // 이번 요청 문자수 (TTS는 입력 텍스트 기준)
+    const reqChars = countCharsCodePoint(textStr);
+
+    // 임계 확인
+    const hitsThreshold =
+      used * 100 >= FREE_LIMIT * FREEZE_PCT ||
+      (used + reqChars) * 100 >= FREE_LIMIT * FREEZE_PCT;
+
+    if (frozen || hitsThreshold) {
+      setFrozen(monthKey, true);
+      return res.status(429).json({
+        error: '🇰🇷 이번 달 무료 사용량을 모두 사용했습니다.\n🇱🇦 ຂ້ອຍໄດ້ໃຊ້ປະລິມານໃຊ້ງານຟຣີຂອງເດືອນນີ້ໝົດແລ້ວ.',
+        code: 'FREE_TIER_EXHAUSTED'
+      });
+    }
+
+    // Google Cloud Text-to-Speech v1 API
+    // POST https://texttospeech.googleapis.com/v1/text:synthesize?key=API_KEY
+    const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(apiKey)}`;
+    const body = {
+      input: { text: textStr },
+      voice: {
+        languageCode,
+        ...(voiceName ? { name: voiceName } : {}),
+        ssmlGender
+      },
+      audioConfig: {
+        audioEncoding,
+        speakingRate,
+        pitch,
+        volumeGainDb
+      }
+    };
+
+    let resp, data, ok = false;
+    for (let i = 0; i < 3; i++) {
+      resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify(body)
+      });
+      if (resp.ok) { ok = true; break; }
+      if (resp.status === 429 || resp.status >= 500) {
+        await new Promise(r => setTimeout(r, 400 * Math.pow(2, i)));
+        continue;
+      }
+      break;
+    }
+    if (!ok) {
+      const txt = await resp.text().catch(() => '');
+      return res
+        .status(resp?.status || 502)
+        .json({ error: 'google_tts_api_error', detail: txt.slice(0, 500) });
+    }
+    data = await resp.json().catch(() => ({}));
+
+    // 성공 시 사용량 적산
+    addUsage(monthKey, reqChars);
+
+    // v1 응답: { audioContent: "base64-encoded-bytes" }
+    const audioContent = data?.audioContent || '';
+
+    return res.json({
+      audioContent,
+      metered_chars: reqChars,
+      month_key: monthKey,
+      used_after: getUsageRow(monthKey).used,
+      limit: FREE_LIMIT,
+      audioEncoding
+    });
+  } catch (e) {
+    console.error('tts_error:', e?.message || e);
+    return res.status(500).json({ error: 'tts_failed' });
+  }
+});
+
 // 서버 시작
 app.listen(PORT, () => {
   console.log(`[translate-api] listening on :${PORT}`);
