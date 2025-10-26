@@ -113,9 +113,13 @@ curl -X POST http://localhost:3000/tts \
    - Character metering based on input text length
    - Same retry logic as translation: 3 attempts with exponential backoff
 
-6. **Security Model**
+6. **Security Model & CORS** (lines 28-33, 300-322)
    - API key loaded from env var `GOOGLE_API_KEY` or file `GOOGLE_API_KEY_FILE`
    - App token authentication via `X-App-Token` header (required for `/translate` and `/tts`)
+   - **CORS middleware**: Configurable origin whitelist via `ALLOWED_ORIGINS` env var
+     - Empty = allow all origins (`*`)
+     - Set = only allow specified origins (comma-separated)
+     - Supports preflight OPTIONS requests
    - Database file permissions enforced at 0600
    - Express app runs as non-root user in Docker container
    - 256kb JSON body limit
@@ -173,8 +177,12 @@ All configured in `.env` file (see [server/env.example](server/env.example)):
 | `GOOGLE_API_KEY_FILE` | Alternative: path to file containing API key | - |
 | `APP_TOKEN` | Authentication token for `/translate` and `/tts` endpoints | - |
 | `PORT` | Server port | 3000 |
-| `FREE_TIER_LIMIT_CHARS` | Monthly character limit (shared between Translation and TTS) | 500000 |
-| `FREE_TIER_FREEZE_THRESHOLD_PCT` | Usage % to trigger freeze | 98 |
+| `SERVER_DOMAIN` | Server public domain (for logging/documentation) | http://localhost:3000 |
+| `ALLOWED_ORIGINS` | CORS allowed origins (comma-separated, empty = allow all) | (empty) |
+| `TRANSLATE_FREE_TIER_CHARS` | Translation monthly character limit | 500000 |
+| `TRANSLATE_FREEZE_THRESHOLD_PCT` | Translation usage % to trigger freeze | 98 |
+| `TTS_FREE_TIER_CHARS` | TTS monthly character limit | 4000000 |
+| `TTS_FREEZE_THRESHOLD_PCT` | TTS usage % to trigger freeze | 98 |
 | `SQLITE_PATH` | Database file path | ./data/usage.sqlite |
 
 ## File Structure

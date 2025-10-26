@@ -25,6 +25,15 @@ const APP_TOKEN = (process.env.APP_TOKEN || '').trim();
 const GOOGLE_API_KEY_FILE = process.env.GOOGLE_API_KEY_FILE || '';
 const GOOGLE_API_KEY_ENV = process.env.GOOGLE_API_KEY || '';
 
+// CORS 설정 (클라이언트 도메인)
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+// 서버 공개 도메인 (로그/문서화 용도)
+const SERVER_DOMAIN = process.env.SERVER_DOMAIN || `http://localhost:${PORT}`;
+
 // Node 18 미만 환경 대비 폴리필
 const fetch = globalThis.fetch ?? (await import('node-fetch')).default;
 
@@ -287,6 +296,31 @@ function getAllUsage(monthKey) {
 // ─────────────────────────────────────────────
 const app = express();
 app.disable('x-powered-by');
+
+// CORS 미들웨어
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  if (ALLOWED_ORIGINS.length === 0) {
+    // ALLOWED_ORIGINS가 비어있으면 모든 origin 허용
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  } else if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    // 허용된 origin만 응답
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-App-Token');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24시간
+
+  // Preflight 요청 처리
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  next();
+});
+
 app.use(express.json({ limit: '256kb' }));
 app.use(morgan('combined'));
 
@@ -549,7 +583,13 @@ app.post('/tts', async (req, res) => {
 // 서버 시작
 app.listen(PORT, () => {
   console.log(`[translate-api] listening on :${PORT}`);
+  console.log(`Server domain: ${SERVER_DOMAIN}`);
   console.log(`DB: ${path.resolve(SQLITE_PATH)}`);
+  if (ALLOWED_ORIGINS.length > 0) {
+    console.log(`CORS allowed origins: ${ALLOWED_ORIGINS.join(', ')}`);
+  } else {
+    console.log('CORS: Allow all origins (*)');
+  }
 });
 
 process.on('unhandledRejection', (reason) => console.error('unhandledRejection:', reason));
