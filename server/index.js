@@ -10,8 +10,15 @@ import Database from 'better-sqlite3';
 // 환경 및 기본 설정
 // ─────────────────────────────────────────────
 const PORT = Number(process.env.PORT || 3000);
-const FREE_LIMIT = Number(process.env.FREE_TIER_LIMIT_CHARS || 500000);
-const FREEZE_PCT = Number(process.env.FREE_TIER_FREEZE_THRESHOLD_PCT || 98);
+
+// Translation API 무료 한도 (Google: 월 50만 문자)
+const TRANSLATE_FREE_LIMIT = Number(process.env.TRANSLATE_FREE_TIER_CHARS || 500000);
+const TRANSLATE_FREEZE_PCT = Number(process.env.TRANSLATE_FREEZE_THRESHOLD_PCT || 98);
+
+// TTS API 무료 한도 (Google Standard: 월 400만 문자, WaveNet: 월 100만 문자)
+const TTS_FREE_LIMIT = Number(process.env.TTS_FREE_TIER_CHARS || 4000000);
+const TTS_FREEZE_PCT = Number(process.env.TTS_FREEZE_THRESHOLD_PCT || 98);
+
 const SQLITE_PATH = process.env.SQLITE_PATH || './data/usage.sqlite';
 const APP_TOKEN = (process.env.APP_TOKEN || '').trim();
 
@@ -143,17 +150,44 @@ applyMigration('002_tts_support', 'Add TTS support (schema compatible)', (db) =>
   console.log('  → TTS uses existing quota system (no schema changes)');
 });
 
-// 향후 마이그레이션 예제 (주석):
-// applyMigration('003_add_api_logs', 'Add API request logs table', `
-//   CREATE TABLE IF NOT EXISTS api_logs (
-//     id INTEGER PRIMARY KEY AUTOINCREMENT,
-//     endpoint TEXT NOT NULL,
-//     status INTEGER NOT NULL,
-//     chars INTEGER NOT NULL DEFAULT 0,
-//     created_at TEXT NOT NULL
-//   );
-//   CREATE INDEX idx_api_logs_created_at ON api_logs(created_at);
-// `);
+// v2.1.0: Translation/TTS 사용량 분리 (Google 무료 한도가 별도)
+applyMigration('003_separate_api_usage', 'Separate Translation and TTS usage tracking', (db) => {
+  console.log('  → Creating new usage_by_api table...');
+
+  // 1. 새 테이블 생성 (API 타입별 사용량 추적)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS usage_by_api (
+      month_key   TEXT NOT NULL,
+      api_type    TEXT NOT NULL,
+      chars_used  INTEGER NOT NULL DEFAULT 0,
+      frozen      INTEGER NOT NULL DEFAULT 0,
+      updated_at  TEXT NOT NULL,
+      PRIMARY KEY (month_key, api_type)
+    )
+  `);
+
+  // 2. 기존 데이터 마이그레이션 (모두 'translation'으로 간주)
+  const oldData = db.prepare('SELECT * FROM usage_monthly').all();
+  if (oldData.length > 0) {
+    console.log(`  → Migrating ${oldData.length} existing records...`);
+    const insert = db.prepare(`
+      INSERT OR REPLACE INTO usage_by_api (month_key, api_type, chars_used, frozen, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    for (const row of oldData) {
+      // 기존 데이터는 모두 번역으로 간주 (v2.0 이전에는 번역만 있었음)
+      insert.run(row.month_key, 'translation', row.chars_used, row.frozen, row.updated_at);
+      // TTS 레코드도 0으로 초기화
+      insert.run(row.month_key, 'tts', 0, 0, row.updated_at);
+    }
+  }
+
+  // 3. 기존 테이블 백업 (향후 복원 가능하도록)
+  db.exec(`ALTER TABLE usage_monthly RENAME TO usage_monthly_backup_v1`);
+
+  console.log('  → Migration complete: usage_by_api table ready');
+});
 
 if (isNewDb) {
   console.log('[Database] Created new SQLite DB:', path.resolve(SQLITE_PATH));
@@ -167,51 +201,85 @@ console.log(`[Database] Applied migrations: ${migrations.length}`);
 migrations.forEach(m => console.log(`  - ${m.name} (${m.applied_at.split('T')[0]})`));
 
 // ─────────────────────────────────────────────
-// DB helper
+// DB helper (API 타입별 사용량 관리)
 // ─────────────────────────────────────────────
-const SELECT_USAGE = db.prepare(`
-  SELECT month_key, chars_used AS used, frozen
-  FROM usage_monthly WHERE month_key = ?
+const SELECT_USAGE_BY_API = db.prepare(`
+  SELECT month_key, api_type, chars_used AS used, frozen
+  FROM usage_by_api WHERE month_key = ? AND api_type = ?
 `);
-const UPSERT_USAGE = db.prepare(`
-  INSERT INTO usage_monthly (month_key, chars_used, frozen, updated_at)
-  VALUES (?, ?, ?, ?)
-  ON CONFLICT(month_key) DO UPDATE SET
+
+const UPSERT_USAGE_BY_API = db.prepare(`
+  INSERT INTO usage_by_api (month_key, api_type, chars_used, frozen, updated_at)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(month_key, api_type) DO UPDATE SET
     chars_used = excluded.chars_used,
     frozen     = excluded.frozen,
     updated_at = excluded.updated_at
 `);
-const INCR_USAGE = db.prepare(`
-  UPDATE usage_monthly
+
+const INCR_USAGE_BY_API = db.prepare(`
+  UPDATE usage_by_api
   SET chars_used = chars_used + ?, updated_at = ?
-  WHERE month_key = ?
-`);
-const SET_FROZEN = db.prepare(`
-  UPDATE usage_monthly
-  SET frozen = ?, updated_at = ?
-  WHERE month_key = ?
+  WHERE month_key = ? AND api_type = ?
 `);
 
-function getUsageRow(monthKey) {
-  let r = SELECT_USAGE.get(monthKey);
+const SET_FROZEN_BY_API = db.prepare(`
+  UPDATE usage_by_api
+  SET frozen = ?, updated_at = ?
+  WHERE month_key = ? AND api_type = ?
+`);
+
+const SELECT_ALL_USAGE = db.prepare(`
+  SELECT api_type, chars_used AS used, frozen
+  FROM usage_by_api WHERE month_key = ?
+`);
+
+// API 타입별 사용량 조회 (없으면 자동 생성)
+function getUsageRow(monthKey, apiType) {
+  let r = SELECT_USAGE_BY_API.get(monthKey, apiType);
   if (!r) {
     const now = new Date().toISOString();
-    UPSERT_USAGE.run(monthKey, 0, 0, now);
-    r = SELECT_USAGE.get(monthKey);
+    UPSERT_USAGE_BY_API.run(monthKey, apiType, 0, 0, now);
+    r = SELECT_USAGE_BY_API.get(monthKey, apiType);
   }
   return r;
 }
-function addUsage(monthKey, delta) {
-  INCR_USAGE.run(delta, new Date().toISOString(), monthKey);
+
+// 사용량 증가
+function addUsage(monthKey, apiType, delta) {
+  INCR_USAGE_BY_API.run(delta, new Date().toISOString(), monthKey, apiType);
 }
-function setFrozen(monthKey, frozenBool) {
-  SET_FROZEN.run(frozenBool ? 1 : 0, new Date().toISOString(), monthKey);
+
+// 동결 상태 설정
+function setFrozen(monthKey, apiType, frozenBool) {
+  SET_FROZEN_BY_API.run(frozenBool ? 1 : 0, new Date().toISOString(), monthKey, apiType);
 }
+
+// 월 롤오버 확인 (두 API 타입 모두 초기화)
 function rolloverIfMonthChanged(currentKey) {
-  const r = SELECT_USAGE.get(currentKey);
-  if (!r) {
-    UPSERT_USAGE.run(currentKey, 0, 0, new Date().toISOString());
-  }
+  const r1 = SELECT_USAGE_BY_API.get(currentKey, 'translation');
+  const r2 = SELECT_USAGE_BY_API.get(currentKey, 'tts');
+  const now = new Date().toISOString();
+
+  if (!r1) UPSERT_USAGE_BY_API.run(currentKey, 'translation', 0, 0, now);
+  if (!r2) UPSERT_USAGE_BY_API.run(currentKey, 'tts', 0, 0, now);
+}
+
+// 모든 API 사용량 조회
+function getAllUsage(monthKey) {
+  const rows = SELECT_ALL_USAGE.all(monthKey);
+  const result = {
+    translation: { used: 0, frozen: 0 },
+    tts: { used: 0, frozen: 0 }
+  };
+
+  rows.forEach(r => {
+    if (r.api_type === 'translation' || r.api_type === 'tts') {
+      result[r.api_type] = { used: r.used, frozen: r.frozen };
+    }
+  });
+
+  return result;
 }
 
 // ─────────────────────────────────────────────
@@ -238,22 +306,34 @@ app.get('/healthz', (_req, res) => {
   return res.type('text/plain').send('ok');
 });
 
-// 월 사용량 조회(공개)
+// 월 사용량 조회(공개) - API별 개별 조회
 app.get('/usage', (_req, res) => {
   try {
     const monthKey = getMonthKeyPST();
     rolloverIfMonthChanged(monthKey);
-    const { used, frozen } = getUsageRow(monthKey);
+    const usage = getAllUsage(monthKey);
+
     res.json({
       month_key: monthKey,
-      used,
-      limit: FREE_LIMIT,
-      remaining: Math.max(0, FREE_LIMIT - used),
-      threshold_pct: FREEZE_PCT,
-      frozen: !!frozen,
-      unit: 'characters'
+      translation: {
+        used: usage.translation.used,
+        limit: TRANSLATE_FREE_LIMIT,
+        remaining: Math.max(0, TRANSLATE_FREE_LIMIT - usage.translation.used),
+        threshold_pct: TRANSLATE_FREEZE_PCT,
+        frozen: !!usage.translation.frozen,
+        unit: 'characters'
+      },
+      tts: {
+        used: usage.tts.used,
+        limit: TTS_FREE_LIMIT,
+        remaining: Math.max(0, TTS_FREE_LIMIT - usage.tts.used),
+        threshold_pct: TTS_FREEZE_PCT,
+        frozen: !!usage.tts.frozen,
+        unit: 'characters'
+      }
     });
-  } catch {
+  } catch (e) {
+    console.error('usage_error:', e?.message || e);
     res.status(500).json({ error: 'usage_failed' });
   }
 });
@@ -276,26 +356,27 @@ app.post('/translate', async (req, res) => {
     try { apiKey = loadGoogleApiKey(); }
     catch (e) { return res.status(500).json({ error: e.message }); }
 
-    // PST 기준 월키 갱신 & 사용량 로딩
+    // PST 기준 월키 갱신 & Translation API 사용량 로딩
     const monthKey = getMonthKeyPST();
     rolloverIfMonthChanged(monthKey);
-    const row = getUsageRow(monthKey);
+    const row = getUsageRow(monthKey, 'translation');
     const used = Number(row.used || 0);
     const frozen = !!row.frozen;
 
     // 이번 요청 문자수(과금 기준: 전송한 모든 문자)
     const reqChars = countCharsBatch(contents);
 
-    // 96% 임계 확인(이미 동결이거나, 이번 요청 포함 시 96% 이상이면 즉시 차단)
+    // Translation API 임계 확인
     const hitsThreshold =
-      used * 100 >= FREE_LIMIT * FREEZE_PCT ||
-      (used + reqChars) * 100 >= FREE_LIMIT * FREEZE_PCT;
+      used * 100 >= TRANSLATE_FREE_LIMIT * TRANSLATE_FREEZE_PCT ||
+      (used + reqChars) * 100 >= TRANSLATE_FREE_LIMIT * TRANSLATE_FREEZE_PCT;
 
     if (frozen || hitsThreshold) {
-      setFrozen(monthKey, true);
+      setFrozen(monthKey, 'translation', true);
       return res.status(429).json({
-        error: '🇰🇷 이번 달 무료 사용량을 모두 사용했습니다.\n🇱🇦 ຂ້ອຍໄດ້ໃຊ້ປະລິມານໃຊ້ງານຟຣີຂອງເດືອນນີ້ໝົດແລ້ວ.',
-        code: 'FREE_TIER_EXHAUSTED'
+        error: '🇰🇷 이번 달 번역 무료 사용량을 모두 사용했습니다.\n🇱🇦 ຂ້ອຍໄດ້ໃຊ້ປະລິມານການແປພາສາຟຣີຂອງເດືອນນີ້ໝົດແລ້ວ.',
+        code: 'TRANSLATION_FREE_TIER_EXHAUSTED',
+        api_type: 'translation'
       });
     }
 
@@ -331,8 +412,8 @@ app.post('/translate', async (req, res) => {
     }
     data = await resp.json().catch(() => ({}));
 
-    // 성공 시 사용량 적산
-    addUsage(monthKey, reqChars);
+    // 성공 시 Translation API 사용량 적산
+    addUsage(monthKey, 'translation', reqChars);
 
     // v2 응답: data.data.translations[{ translatedText, detectedSourceLanguage? }]
     const translations = (data?.data?.translations || []).map(t => t.translatedText || '');
@@ -342,8 +423,9 @@ app.post('/translate', async (req, res) => {
       cached: false,
       metered_chars: reqChars,
       month_key: monthKey,
-      used_after: getUsageRow(monthKey).used,
-      limit: FREE_LIMIT
+      api_type: 'translation',
+      used_after: getUsageRow(monthKey, 'translation').used,
+      limit: TRANSLATE_FREE_LIMIT
     });
   } catch (e) {
     console.error('translate_error:', e?.message || e);
@@ -379,26 +461,27 @@ app.post('/tts', async (req, res) => {
     try { apiKey = loadGoogleApiKey(); }
     catch (e) { return res.status(500).json({ error: e.message }); }
 
-    // PST 기준 월키 갱신 & 사용량 로딩
+    // PST 기준 월키 갱신 & TTS API 사용량 로딩
     const monthKey = getMonthKeyPST();
     rolloverIfMonthChanged(monthKey);
-    const row = getUsageRow(monthKey);
+    const row = getUsageRow(monthKey, 'tts');
     const used = Number(row.used || 0);
     const frozen = !!row.frozen;
 
     // 이번 요청 문자수 (TTS는 입력 텍스트 기준)
     const reqChars = countCharsCodePoint(textStr);
 
-    // 임계 확인
+    // TTS API 임계 확인
     const hitsThreshold =
-      used * 100 >= FREE_LIMIT * FREEZE_PCT ||
-      (used + reqChars) * 100 >= FREE_LIMIT * FREEZE_PCT;
+      used * 100 >= TTS_FREE_LIMIT * TTS_FREEZE_PCT ||
+      (used + reqChars) * 100 >= TTS_FREE_LIMIT * TTS_FREEZE_PCT;
 
     if (frozen || hitsThreshold) {
-      setFrozen(monthKey, true);
+      setFrozen(monthKey, 'tts', true);
       return res.status(429).json({
-        error: '🇰🇷 이번 달 무료 사용량을 모두 사용했습니다.\n🇱🇦 ຂ້ອຍໄດ້ໃຊ້ປະລິມານໃຊ້ງານຟຣີຂອງເດືອນນີ້ໝົດແລ້ວ.',
-        code: 'FREE_TIER_EXHAUSTED'
+        error: '🇰🇷 이번 달 음성합성 무료 사용량을 모두 사용했습니다.\n🇱🇦 ຂ້ອຍໄດ້ໃຊ້ປະລິມານການສັງເຄາະສຽງຟຣີຂອງເດືອນນີ້ໝົດແລ້ວ.',
+        code: 'TTS_FREE_TIER_EXHAUSTED',
+        api_type: 'tts'
       });
     }
 
@@ -442,8 +525,8 @@ app.post('/tts', async (req, res) => {
     }
     data = await resp.json().catch(() => ({}));
 
-    // 성공 시 사용량 적산
-    addUsage(monthKey, reqChars);
+    // 성공 시 TTS API 사용량 적산
+    addUsage(monthKey, 'tts', reqChars);
 
     // v1 응답: { audioContent: "base64-encoded-bytes" }
     const audioContent = data?.audioContent || '';
@@ -452,8 +535,9 @@ app.post('/tts', async (req, res) => {
       audioContent,
       metered_chars: reqChars,
       month_key: monthKey,
-      used_after: getUsageRow(monthKey).used,
-      limit: FREE_LIMIT,
+      api_type: 'tts',
+      used_after: getUsageRow(monthKey, 'tts').used,
+      limit: TTS_FREE_LIMIT,
       audioEncoding
     });
   } catch (e) {

@@ -12,10 +12,12 @@ services:
       - APP_TOKEN=${APP_TOKEN}
       # 서버 포트
       - PORT=${PORT}
-      # 월별 무료 사용량 한도 (번역 + TTS 통합)
-      - FREE_TIER_LIMIT_CHARS=${FREE_TIER_LIMIT_CHARS:-500000}
-      # 사용량 차단 임계 비율
-      - FREE_TIER_FREEZE_THRESHOLD_PCT=${FREE_TIER_FREEZE_THRESHOLD_PCT:-98}
+      # Translation API 무료 한도 (월 50만 문자)
+      - TRANSLATE_FREE_TIER_CHARS=${TRANSLATE_FREE_TIER_CHARS:-500000}
+      - TRANSLATE_FREEZE_THRESHOLD_PCT=${TRANSLATE_FREEZE_THRESHOLD_PCT:-98}
+      # TTS API 무료 한도 (Standard: 월 400만 문자)
+      - TTS_FREE_TIER_CHARS=${TTS_FREE_TIER_CHARS:-4000000}
+      - TTS_FREEZE_THRESHOLD_PCT=${TTS_FREEZE_THRESHOLD_PCT:-98}
       # SQLite DB 경로
       - SQLITE_PATH=${SQLITE_PATH:-/app/data/usage.sqlite}
     ports:
